@@ -1,6 +1,6 @@
-# KFUPM Bio-Data Platform — Pilot 1 POC (synthetic data)
+# HCLS Bio-Data Platform — POC (synthetic data)
 
-Proof-of-concept for the **KFUPM / JHAH Bio-Data Platform**, Pilot 1: paediatric
+Proof-of-concept for the HCLS Demo: paediatric
 **diabetes & obesity risk prediction** (ages 8–18), delivered end-to-end on
 Google Cloud using **synthetic data only** (no PHI, no real patient data).
 
@@ -96,5 +96,4 @@ Two model structures are built so you can compare:
 
 ---
 
-*Part of the EPAM × Google Cloud engagement for the KFUPM Bio-Data Platform.
-Internal / confidential.*
+
