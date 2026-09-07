@@ -1,13 +1,8 @@
-# HCLS — GCP POC Runbook (both diabetes + obesity)
+# Runbook — Paediatric Diabetes & Obesity Risk POC
 
-Runs the **full GCP path** on synthetic data, predicting **both** diabetes and
-obesity risk in children/adolescents (8–18) — matching KFUPM's stated target:
-*"a locally developed and validated model that predicts the risk of diabetes
-mellitus and obesity in children and adolescents aged 8–18."*
-
-Flow:  Synthea FHIR → GCS → **Cloud Healthcare API** (native import) →
-**BigQuery** (native SQL-on-FHIR export) → OMOP-style features →
-**BigQuery ML** (both model structures) → evaluate + explain + predict.
+Full GCP path on synthetic data, predicting **both** diabetes and obesity risk in
+children/adolescents (8–18), built through a medallion architecture
+(Bronze → Silver/OMOP → Gold/cohort → models).
 
 Everything is synthetic — proves method and pipeline, not clinical validity.
 
@@ -16,98 +11,96 @@ Everything is synthetic — proves method and pipeline, not clinical validity.
 ## Prerequisites
 - A GCP project you own, with billing enabled
 - `gcloud`, `bq`, `gcloud storage` installed and authenticated (`gcloud auth login`)
-- Java 17+ (for Synthea) — only needed on the machine that generates data
-- The `custom_modules/paediatric_glycemic.json` file (injects HbA1c + glucose)
-
-## Files
-| File | Does |
-|---|---|
-| `00_setup.sh` | Edit vars; enables APIs, creates bucket / dataset / FHIR store / BQ datasets / IAM |
-| `01_generate_and_ingest.sh` | Synthea (with glycemic module) → GCS → `fhirStores.import` |
-| `02_export_to_bigquery.sh` | Native FHIR store → BigQuery (Analytics V2) |
-| `03a_features.sql` | Raw SQL-on-FHIR → feature table with **both** labels |
-| `03b_models.sql` | BigQuery ML — Approach A (separate) + Approach B (combined) + eval/explain/predict |
-| `03_build_omop_and_features.sh` | Substitutes vars and runs 03a + 03b |
-| `custom_modules/paediatric_glycemic.json` | The HbA1c/glucose module |
+- Java 17+ (for Synthea) — only on the machine that generates data
+- `custom_modules/paediatric_glycemic.json` present (injects HbA1c + glucose)
 
 ---
 
-## Run it (in order)
+## Steps
 
+### 0. Setup
 ```bash
-# 0. edit the vars at the top of 00_setup.sh (PROJECT_ID, REGION, ...)
-nano 00_setup.sh
-source 00_setup.sh
-setup_gcp                      # one-time: APIs, bucket, FHIR store, BQ datasets, IAM
-
-# 1. generate + ingest (default 500 patients; pass a number to change)
-chmod +x *.sh
-./01_generate_and_ingest.sh 500
-
-# 2. FHIR store -> BigQuery (native, SQL-on-FHIR)
-./02_export_to_bigquery.sh
-
-# 3. build features (both labels) + train/evaluate both model structures
-./03_build_omop_and_features.sh
+cp 00_setup.sh setup_local.sh      # gitignored; holds your real values
+nano setup_local.sh                # PROJECT_ID, REGION, dataset names
+source setup_local.sh
+setup_gcp                          # APIs, bucket, FHIR store, 4 BQ datasets, IAM
 ```
+Region: for a throwaway POC `us-central1` is simplest. For in-Kingdom use
+`me-central1/2` — but confirm Healthcare API + BQML feature availability there first.
+
+### 1. Generate + ingest (Bronze in)
+```bash
+chmod +x *.sh
+./01_generate_and_ingest.sh 500    # Synthea (NDJSON) -> GCS -> fhirStores.import
+```
+Verify (the `_summary=count` FHIR param is NOT supported; use the import counter):
+```bash
+gcloud healthcare operations describe <OP_ID> \
+  --dataset="$HC_DATASET" --location="$REGION" --format="yaml(metadata)"
+# look for counter.success (~150k resources for 500 patients)
+```
+
+### 2. FHIR store → BigQuery (Bronze)
+```bash
+./02_export_to_bigquery.sh
+```
+Prints table row counts. Observation should be the largest (tens of thousands).
+
+Sanity-check the key LOINC codes are present before building features:
+```bash
+bq query --use_legacy_sql=false --project_id="$PROJECT_ID" "
+SELECT o.code.coding[SAFE_OFFSET(0)].code AS loinc, COUNT(*) n,
+       ROUND(AVG(o.value.quantity.value),1) avg_val
+FROM \`${PROJECT_ID}.${BQ_RAW}.Observation\` o
+WHERE o.code.coding[SAFE_OFFSET(0)].code IN ('4548-4','1558-6','59576-9','29463-7','8302-2')
+GROUP BY loinc ORDER BY n DESC"
+```
+Expect: 4548-4 (HbA1c ~5.3%), 1558-6 (glucose ~90), 59576-9 (BMI-pct), 29463-7 (weight), 8302-2 (height).
+
+### 3. OMOP → cohort → models (Silver, Gold, models)
+```bash
+./03_build_pipeline.sh
+```
+Runs, in order:
+- `02b_fhir_to_omop.sql` — OMOP tables (person, measurement, …) + counts
+- `03a_cohort.sql` — cohort + features + **class balance**
+- `03b_models.sql` — train A (separate) + B (combined), evaluate, explain, predict
 
 ---
 
 ## What you get
 
-**Two label columns**, both from KFUPM's ask:
-- `label_obese`    = BMI percentile-for-age ≥ 95
-- `label_diabetes` = HbA1c ≥ 6.5  (plus `label_prediabetes` ≥ 5.7)
+**OMOP (Silver, `..._omop`):** person, measurement, condition_occurrence,
+visit_occurrence, observation_period, drug_exposure — correct OMOP structure,
+`*_concept_id` = 0 placeholder (vocabulary mapping is production work).
 
-**Two model structures, to compare:**
-- **Approach A** — `m_obesity` and `m_diabetes`: two separate binary models (cleanest, most interpretable; recommended for clinical use — each risk is its own explainable score).
-- **Approach B** — `m_combined`: one multiclass model over 4 states (neither / obese / diabetic / both). Useful to see joint patterns, but harder to threshold clinically.
+**Gold (`..._curated`):** `cohort` (8–18 study population) + `features`
+(variables + `label_obese`, `label_diabetes`, `label_prediabetes`).
 
-**Outputs in BigQuery** (`${BQ_OMOP}`):
-- `ML.EVALUATE` → precision, recall, accuracy, f1, log_loss, **roc_auc** per model
-- `ML.GLOBAL_EXPLAIN` → feature drivers (which vitals/labs push risk)
-- `predictions` table → per-patient `obesity_risk` and `diabetes_risk` scores
+**Models (`..._models`):**
+- `m_obesity`, `m_diabetes` (Approach A — separate binary)
+- `m_combined` (Approach B — multiclass: neither / obese / diabetic / both)
+- `predictions` (per-patient `obesity_risk` + `diabetes_risk`)
+- `ML.EVALUATE` (roc_auc, precision, recall, …) and `ML.GLOBAL_EXPLAIN` per model
 
 ---
 
-## IMPORTANT sanity checks (do these — synthetic data has quirks)
+## Sanity checks (synthetic data has quirks)
 
-1. **Class balance** — the last query in `03a` prints counts. If `diabetes` is tiny
-   (few HbA1c ≥ 6.5), increase patients (`./01_... 1000`) or raise the module's
-   high-weight HbA1c range. `auto_class_weights=TRUE` handles moderate imbalance.
+1. **Class balance** — printed by `03a`. With avg HbA1c ~5.3%, the diabetic class
+   (HbA1c ≥ 6.5) may be small. If diabetes positives are in single digits, the
+   diabetes model is noisy — generate more patients (`./01_... 1000`) or widen the
+   module's high-weight HbA1c band. `auto_class_weights=TRUE` handles moderate imbalance.
 
 2. **Feature nulls** — Synthea uses several LOINC codes for weight/height by age.
-   Check the feature table isn't mostly null:
-   ```sql
-   SELECT COUNTIF(weight_kg IS NULL) n_wt_null, COUNTIF(height_cm IS NULL) n_ht_null,
-          COUNTIF(fasting_glucose IS NULL) n_glu_null, COUNT(*) n
-   FROM `PROJECT.kfupm_poc_omop.features`;
-   ```
-   If weight/height are mostly null, add the missing LOINC codes to the `AVG(IF(...))`
-   lines in `03a_features.sql` (Synthea weight codes seen: 29463-7, 3141-9; height: 8302-2).
+   If features are mostly null, add codes to the `AVG(IF(...))` lines in `03a_cohort.sql`
+   (weight seen: 29463-7; height: 8302-2).
 
-3. **No target leakage** — features deliberately EXCLUDE BMI-percentile (obesity label
-   source) and HbA1c (diabetes label source). `bmi_ratio` (the raw BMI value) is kept —
-   if you consider that too close to the obesity label, drop it from `03b` obesity model.
+3. **No target leakage** — features exclude BMI-percentile (obesity label source) and
+   HbA1c (diabetes label source). `bmi_ratio` is kept; drop it from the obesity model
+   in `03b` if you consider it too close to the label.
 
 ---
-
-## How this maps to the real Pilot 1
-
-| POC (synthetic) | Real Pilot 1 (JHAH) |
-|---|---|
-| Synthea FHIR + glycemic module | Epic Bulk FHIR ($export) NDJSON → GCS |
-| `fhirStores.import` | same — native import (no build) |
-| FHIR→BigQuery Analytics V2 | same — native export/streaming (no build) |
-| `03a` feature SQL | FHIR→OMOP mapping (Whistle/Dataflow) — the EPAM build |
-| labels from HbA1c / BMI-pct | clinician-defined diabetes & obesity criteria |
-| BigQuery ML both structures | BigQuery ML / Agent Platform, validated on prospective set |
-| synthetic metrics | real retrospective validation, then prospective in JHAH clinics |
-
-**Two-stage framing (matches KFUPM's words):** this POC is the *first stage* —
-"research-ready historical cohort + develop and retrospectively validate the
-algorithms." The *second stage* (limited prospective clinical validation in JHAH
-clinics) comes after real-data performance and approvals.
 
 ## Cleanup (avoid ongoing cost)
 ```bash
@@ -115,5 +108,7 @@ gcloud healthcare fhir-stores delete "$FHIR_STORE" --dataset="$HC_DATASET" --loc
 gcloud healthcare datasets delete "$HC_DATASET" --location="$REGION" --quiet
 bq rm -r -f -d "${PROJECT_ID}:${BQ_RAW}"
 bq rm -r -f -d "${PROJECT_ID}:${BQ_OMOP}"
+bq rm -r -f -d "${PROJECT_ID}:${BQ_CURATED}"
+bq rm -r -f -d "${PROJECT_ID}:${BQ_MODELS}"
 gcloud storage rm -r "gs://$BUCKET"
 ```
