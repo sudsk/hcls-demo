@@ -1,0 +1,144 @@
+{
+  "name": "Paediatric Glycemic Panel",
+  "remarks": [
+    "POC module for KFUPM Pilot 1.",
+    "Adds HbA1c and fasting glucose observations for children/adolescents,",
+    "with values correlated to weight so an obesity->dysglycemia signal exists.",
+    "Runs a yearly encounter+panel from age 8 to 18.",
+    "Codes match Synthea's core metabolic module (LOINC 4548-4 HbA1c)."
+  ],
+  "gmf_version": 2,
+  "states": {
+
+    "Initial": {
+      "type": "Initial",
+      "direct_transition": "Wait_Until_8"
+    },
+
+    "Wait_Until_8": {
+      "type": "Delay",
+      "exact": { "quantity": 8, "unit": "years" },
+      "direct_transition": "Annual_Check_Loop"
+    },
+
+    "Annual_Check_Loop": {
+      "type": "Guard",
+      "allow": {
+        "condition_type": "Age",
+        "operator": "<=",
+        "quantity": 18,
+        "unit": "years"
+      },
+      "direct_transition": "Glycemic_Encounter"
+    },
+
+    "Glycemic_Encounter": {
+      "type": "Encounter",
+      "encounter_class": "ambulatory",
+      "reason": "",
+      "codes": [
+        { "system": "SNOMED-CT", "code": "162673000", "display": "General examination of patient (procedure)" }
+      ],
+      "direct_transition": "Set_Risk_By_Weight"
+    },
+
+    "Set_Risk_By_Weight": {
+      "type": "Simple",
+      "remarks": [
+        "Branch on body weight (a proxy for adiposity that Synthea already sets)",
+        "to give heavier children higher glycemic values."
+      ],
+      "conditional_transition": [
+        {
+          "condition": {
+            "condition_type": "Vital Sign",
+            "vital_sign": "Weight",
+            "operator": ">=",
+            "value": 70
+          },
+          "transition": "HbA1c_High"
+        },
+        {
+          "condition": {
+            "condition_type": "Vital Sign",
+            "vital_sign": "Weight",
+            "operator": ">=",
+            "value": 55
+          },
+          "transition": "HbA1c_Mid"
+        },
+        {
+          "transition": "HbA1c_Normal"
+        }
+      ]
+    },
+
+    "HbA1c_High": {
+      "type": "Observation",
+      "category": "laboratory",
+      "unit": "%",
+      "codes": [
+        { "system": "LOINC", "code": "4548-4", "display": "Hemoglobin A1c/Hemoglobin.total in Blood" }
+      ],
+      "range": { "low": 6.0, "high": 8.5 },
+      "direct_transition": "Glucose_High"
+    },
+    "HbA1c_Mid": {
+      "type": "Observation",
+      "category": "laboratory",
+      "unit": "%",
+      "codes": [
+        { "system": "LOINC", "code": "4548-4", "display": "Hemoglobin A1c/Hemoglobin.total in Blood" }
+      ],
+      "range": { "low": 5.7, "high": 6.4 },
+      "direct_transition": "Glucose_Mid"
+    },
+    "HbA1c_Normal": {
+      "type": "Observation",
+      "category": "laboratory",
+      "unit": "%",
+      "codes": [
+        { "system": "LOINC", "code": "4548-4", "display": "Hemoglobin A1c/Hemoglobin.total in Blood" }
+      ],
+      "range": { "low": 4.5, "high": 5.6 },
+      "direct_transition": "Glucose_Normal"
+    },
+
+    "Glucose_High": {
+      "type": "Observation",
+      "category": "laboratory",
+      "unit": "mg/dL",
+      "codes": [
+        { "system": "LOINC", "code": "1558-6", "display": "Fasting glucose [Mass/volume] in Serum or Plasma" }
+      ],
+      "range": { "low": 110, "high": 160 },
+      "direct_transition": "Wait_One_Year"
+    },
+    "Glucose_Mid": {
+      "type": "Observation",
+      "category": "laboratory",
+      "unit": "mg/dL",
+      "codes": [
+        { "system": "LOINC", "code": "1558-6", "display": "Fasting glucose [Mass/volume] in Serum or Plasma" }
+      ],
+      "range": { "low": 100, "high": 125 },
+      "direct_transition": "Wait_One_Year"
+    },
+    "Glucose_Normal": {
+      "type": "Observation",
+      "category": "laboratory",
+      "unit": "mg/dL",
+      "codes": [
+        { "system": "LOINC", "code": "1558-6", "display": "Fasting glucose [Mass/volume] in Serum or Plasma" }
+      ],
+      "range": { "low": 70, "high": 99 },
+      "direct_transition": "Wait_One_Year"
+    },
+
+    "Wait_One_Year": {
+      "type": "Delay",
+      "exact": { "quantity": 1, "unit": "years" },
+      "direct_transition": "Annual_Check_Loop"
+    }
+  }
+}

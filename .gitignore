@@ -1,0 +1,27 @@
+# ---- large / generated / reproducible artifacts (never commit) ----
+synthea.jar
+synthea-with-dependencies.jar
+output/
+output_glyc/
+*.ndjson
+*.zip
+
+# ---- generated OMOP/intermediate ----
+omop_csv/
+*.csv
+
+# ---- secrets / local config ----
+.env
+*_local.sh
+service-account*.json
+*credentials*.json
+*.key
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+__pycache__/
+*.pyc
