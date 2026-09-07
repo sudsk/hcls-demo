@@ -1,4 +1,4 @@
-# KFUPM Pilot 1 — GCP POC Runbook (both diabetes + obesity)
+# HCLS — GCP POC Runbook (both diabetes + obesity)
 
 Runs the **full GCP path** on synthetic data, predicting **both** diabetes and
 obesity risk in children/adolescents (8–18) — matching KFUPM's stated target:
