@@ -11,7 +11,7 @@ echo ">> exporting FHIR store -> BigQuery ($BQ_RAW) with Analytics V2 schema..."
 gcloud healthcare fhir-stores export bq "$FHIR_STORE" \
   --dataset="$HC_DATASET" --location="$REGION" \
   --bq-dataset="bq://${PROJECT_ID}.${BQ_RAW}" \
-  --schema-type=analytics-v2 \
+  --schema-type=analytics_v2 \
   --recursive-depth=3 \
   --write-disposition=write-truncate
 
