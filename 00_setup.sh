@@ -6,13 +6,15 @@
 # ============================================================
 
 # ---- EDIT THESE ----
-export PROJECT_ID="<PROJECT_ID>"          # your GCP project
+export PROJECT_ID="or2-msq-epmc-acm-de-t1iylu"          # your GCP project
 export REGION="us-central1"                # POC region (see note on in-Kingdom below)
 export BUCKET="${PROJECT_ID}-kfupm-poc"    # GCS landing bucket (must be globally unique)
 export HC_DATASET="kfupm_poc"              # Cloud Healthcare API dataset
 export FHIR_STORE="epic_fhir"              # FHIR store id
 export BQ_RAW="kfupm_poc_raw"              # BigQuery dataset for raw (SQL-on-FHIR) tables
-export BQ_OMOP="kfupm_poc_omop"            # BigQuery dataset for OMOP + features + models
+export BQ_OMOP="kfupm_poc_omop"            # OMOP CDM (Silver) — study-agnostic, reusable
+export BQ_CURATED="kfupm_poc_curated"      # cohort + features (Gold)
+export BQ_MODELS="kfupm_poc_models"        # trained models + predictions
 # --------------------
 
 # NOTE on region: for the real engagement use an in-Kingdom region
@@ -48,18 +50,20 @@ setup_gcp () {
   echo ">> creating BigQuery datasets..."
   bq --location="$REGION" mk -d "${PROJECT_ID}:${BQ_RAW}" 2>/dev/null || echo "   (raw dataset exists)"
   bq --location="$REGION" mk -d "${PROJECT_ID}:${BQ_OMOP}" 2>/dev/null || echo "   (omop dataset exists)"
+  bq --location="$REGION" mk -d "${PROJECT_ID}:${BQ_CURATED}" 2>/dev/null || echo "   (curated dataset exists)"
+  bq --location="$REGION" mk -d "${PROJECT_ID}:${BQ_MODELS}" 2>/dev/null || echo "   (models dataset exists)"
 
   echo ">> granting the Healthcare Service Agent permission to write to BigQuery..."
   # find the Healthcare service agent and give it BQ dataEditor + jobUser
   PROJ_NUM=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
   HC_SA="service-${PROJ_NUM}@gcp-sa-healthcare.iam.gserviceaccount.com"
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${HC_SA}" --role="roles/bigquery.dataEditor" --condition=None --quiet >/dev/null
+    --member="serviceAccount:${HC_SA}" --role="roles/bigquery.dataEditor" --quiet >/dev/null
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:${HC_SA}" --role="roles/bigquery.jobUser" --condition=None --quiet >/dev/null
+    --member="serviceAccount:${HC_SA}" --role="roles/bigquery.jobUser" --quiet >/dev/null
   # also allow it to read the import bucket
   gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
-    --member="serviceAccount:${HC_SA}" --role="roles/storage.objectViewer" --condition=None --quiet >/dev/null
+    --member="serviceAccount:${HC_SA}" --role="roles/storage.objectViewer" --quiet >/dev/null
 
   echo ">> setup complete."
 }
